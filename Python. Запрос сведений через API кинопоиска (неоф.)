@@ -1,0 +1,99 @@
+# Более удобная для восприятия версия в формате jupyter notebook загружена отдельным файлом Python. Movies_API.
+
+# Код, позволяющий обратиться к API кинопоиска (неоф.), получить сведения, обработать их 
+# и привести к удобной таблице, с которой в последствии можно работать, строить графики.
+# Внимание! Необходимо изначально получить токен в телеграм-боте @kinopoiskdev_bot, документация по API https://api.kinopoisk.dev/documentation.
+
+import requests
+from pprint import pprint
+import pandas as pd
+import json
+import numpy as np
+
+# Создаем запрос сведений о фильмах за определенный год (года) через API кинопоиск (неоф.)
+
+headers = {'X-API-KEY': 'ВАШ ТОКЕН'}
+def get_movies_by_year(year, page = 1, limit = 100):
+    response = requests.get(
+        'https://api.kinopoisk.dev/v1.4/movie',
+        params={
+            'selectFields': ['id', 'name', 'year', 'rating', 'ageRating', 'budget', 'genres', 'countries', 'fees'],           
+            'notNullFields': ['ageRating'],
+            'notNullFields': ['fees.world.value'],
+            'notNullFields': ['fees.world.currency'],
+            'notNullFields': ['budget.value'],
+            'notNullFields': ['budget.currency'],
+            'notNullFields': ['rating.imdb'],
+            'rating.imdb': '7-10',
+            'year': year,
+            'limit': limit,
+            'page': page,
+        },
+        headers=headers
+    )
+    movies = response.json()
+    return movies['docs']
+
+year = (2020, 2021, 2022, 2023)
+movies = get_movies_by_year(year)
+pprint(movies)
+
+# Создаем датафрейм для pd
+
+df = pd.json_normalize(movies)
+df
+
+# Развернем встроенные таблицы в столбцах genres и countries
+
+genres_with_id = pd.json_normalize(movies, record_path='genres', meta='id', record_prefix='genres.', errors="ignore")
+genres_with_id.info()
+
+df_copy = df.copy()
+df_copy.drop(['genres'], axis='columns', inplace=True)
+
+genres_with_id_grouped = genres_with_id.groupby(['id'], as_index= False ).agg({'genres.name': ', '. join })
+genres_with_id_grouped
+
+summary = df_copy.merge(genres_with_id_grouped, how='outer', on='id')
+summary
+
+countries_with_id = pd.json_normalize(movies, record_path='countries', meta='id', record_prefix='countries.', errors="ignore")
+
+countries_with_id.info()
+
+summary.drop(['countries'], axis='columns', inplace=True)
+
+countries_with_id_grouped = countries_with_id.groupby(['id'], as_index= False ).agg({'countries.name': ', '. join })
+countries_with_id_grouped
+
+df_to_work = summary.merge(countries_with_id_grouped, how='outer', on='id')
+df_to_work
+
+# Сформируем датасет для работы, поменяем столбцы местами, оставим интересующие нас столбцы
+
+df_to_work_cut = df_to_work[['id', 'name', 'year', 'rating.imdb', 'genres.name', 'countries.name', 'budget.value', 'budget.currency', 'fees.world.value', 'fees.world.currency', 'fees.russia.value', 'fees.russia.currency', 'fees.usa.value',	'fees.usa.currency']]
+df_to_work_cut
+
+# Проверим, фильмы каких стран получили наибольшие сборы в мире (топ-10), из имеющихся в датасете.
+
+fees_to_countries = df_to_work_cut.groupby('countries.name')['fees.world.value'].sum()
+fees_to_countries
+fees_to_countries.sort_values(ascending=False)[:10]
+
+# Найдем самый дорогой по бюджету фильм в имеющемся датасете.
+
+top_1 = df_to_work_cut.copy()
+top_1
+top_1.sort_values('budget.value', ascending=False)[:1]
+
+# Сравним количество фильмов, попавших в наш датасет, по годам
+
+df_to_work_cut['year'].value_counts().sort_index().plot(kind='bar', figsize=(15, 5))
+
+# Проверим, есть ли взаимосвязь между размером бюджета фильма и рейтингом iMDb
+
+import matplotlib.pyplot as plt
+plt.scatter(df_to_work_cut['budget.value'], df_to_work_cut['rating.imdb'])
+plt.ylabel('rating.imdb')
+plt.xlabel('budget.value')
+plt.show()
